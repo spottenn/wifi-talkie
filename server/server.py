@@ -185,7 +185,7 @@ async def main():
     logger.info(f"WebSocket endpoint: ws://{HOST}:{PORT}/walkie")
     logger.info("=" * 40)
 
-    async with serve(handle_client, HOST, PORT, path="/walkie"):
+    async with serve(handle_client, HOST, PORT):
         await asyncio.Future()  # run forever
 
 
