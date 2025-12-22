@@ -1,0 +1,8 @@
+[wokwi]
+version = 1
+elf = ".pio/build/m5stack-atom/firmware.elf"
+firmware = ".pio/build/m5stack-atom/firmware.bin"
+
+[[net.forward]]
+from = "localhost:8080"
+to = "target:8080"
