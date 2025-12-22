@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "author": "WiFi Walkie-Talkie",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "board-esp32-devkit-c-v4",
+      "id": "esp",
+      "top": 0,
+      "left": 0,
+      "attrs": { "builder": "esp32-devkit-c-v4" }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn1",
+      "top": 20,
+      "left": 200,
+      "attrs": { "color": "blue", "label": "PTT" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led1",
+      "top": 100,
+      "left": 200,
+      "attrs": { "color": "red", "label": "Status" }
+    }
+  ],
+  "connections": [
+    [ "btn1:1.l", "esp:39", "green", [ "v0" ] ],
+    [ "btn1:2.r", "esp:GND.2", "black", [ "v0" ] ],
+    [ "led1:A", "esp:25", "green", [ "v0" ] ],
+    [ "led1:C", "esp:GND.1", "black", [ "v0" ] ]
+  ]
+}
