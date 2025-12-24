@@ -72,25 +72,46 @@ void setupI2S() {
 }
 
 void connectWiFi() {
-    Serial.print("Connecting to WiFi: ");
-    Serial.println(WIFI_SSID);
-
     setLEDColor(COLOR_DISCONNECTED);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-    unsigned long startAttempt = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < WIFI_TIMEOUT) {
-        delay(500);
-        Serial.print(".");
+    // List of WiFi networks to try (in order)
+    const char* networks[][2] = {
+        {WIFI_SSID_1, WIFI_PASSWORD_1},
+        {WIFI_SSID_2, WIFI_PASSWORD_2},
+        {WIFI_SSID_3, WIFI_PASSWORD_3}
+    };
+
+    // Try each network
+    for (int i = 0; i < 3; i++) {
+        // Skip empty network names
+        if (strlen(networks[i][0]) == 0) {
+            continue;
+        }
+
+        Serial.print("Trying WiFi network: ");
+        Serial.println(networks[i][0]);
+
+        WiFi.begin(networks[i][0], networks[i][1]);
+
+        unsigned long startAttempt = millis();
+        while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < WIFI_TIMEOUT) {
+            delay(500);
+            Serial.print(".");
+        }
+
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.println("\nWiFi connected!");
+            Serial.print("Network: ");
+            Serial.println(networks[i][0]);
+            Serial.print("IP address: ");
+            Serial.println(WiFi.localIP());
+            return;  // Successfully connected
+        } else {
+            Serial.println("\nFailed to connect to this network.");
+        }
     }
 
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("\nWiFi connected!");
-        Serial.print("IP address: ");
-        Serial.println(WiFi.localIP());
-    } else {
-        Serial.println("\nWiFi connection failed!");
-    }
+    Serial.println("ERROR: Could not connect to any WiFi network!");
 }
 
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
