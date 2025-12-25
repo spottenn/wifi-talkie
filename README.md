@@ -83,29 +83,13 @@ pio device monitor
 
 ## Server Setup
 
-You have two options for the relay server:
-
-### Option 1: Node.js Server (Recommended)
-
 ```bash
 cd server
-npm install
-npm start
-
-# Server will run on http://0.0.0.0:8080
-# WebSocket endpoint: ws://your-ip:8080/walkie
-```
-
-### Option 2: Python Server
-
-```bash
-cd server
-pip install -r requirements.txt
+pip install websockets
 python server.py
-
-# Server will run on http://0.0.0.0:8080
-# WebSocket endpoint: ws://your-ip:8080/walkie
 ```
+
+Server runs on `ws://your-ip:8080/walkie`
 
 ### Server Deployment Options
 
