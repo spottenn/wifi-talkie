@@ -32,28 +32,12 @@ All major audio quality issues have been fixed and tested. All 3 walkie-talkies 
 **Fix**: Increased to 8 x 256 = 2048 samples = 128ms buffer
 **Test result**: Consistent ~31ms inter-packet timing with smooth playback
 
-## Audio Quality Metrics (Final Testing)
+## Audio Quality (Verified)
 
-### Both Devices Tested
-| Device | Source | Avg Amplitude | Max Amplitude | Headroom | Clipping |
-|--------|--------|---------------|---------------|----------|----------|
-| COM9 (Walkie-Dad) | Ambient | 11,957 | 12,936 | 60.5% | 0% |
-| COM13 (Larsens) | Phone podcast | 14,292 | 26,232 | 19.9% | 0% |
-
-### Success Criteria Verified
-1. **Audio Consistency**: End vs middle amplitude difference < 0.5% (all recordings)
-2. **Volume**: Average amplitude > 2,000 (achieved 11,957 - 14,292)
-3. **No Clipping**: 0% clipped samples even with loud phone input
-4. **Buzzing Fix**: Serial logs confirm auto-switch to mic mode after 300ms timeout
-
-### Raw Metrics (COM9 Test)
-```
-Duration: 3.10 seconds
-Average Amplitude: 11,957 (target: > 2,000)
-Packet Count: 97 packets
-Avg Inter-Packet Delay: 31.04 ms
-Min/Max Delays: 7.71ms - 48.97ms
-```
+- Average amplitude: ~12,000 (target was >2,000)
+- No clipping even with loud input
+- Smooth 31ms packet timing
+- Auto-switch to mic mode after 300ms silence
 
 ## Hardware Reality: M5Stack Atom Echo
 
@@ -131,35 +115,10 @@ DEVICE_NAME=<set per device>
 
 ## Debug Commands (Serial)
 
-Type these characters into the serial monitor:
-- `T` - Start 3-second test transmission
-- `S` - Stop transmission
-- `?` - Print device status
-
-## Testing
-
-### Debug Commands (via Serial Monitor)
-Use PlatformIO serial monitor to send debug commands:
 ```powershell
 C:\Users\spott\AppData\Local\Programs\Python\Python312\Scripts\pio.exe device monitor --port COM9 --baud 115200
 ```
-Then type: `T` (transmit), `S` (stop), `?` (status)
-
-### Server Audio Recording
-The server records transmissions to `server/recordings/*.wav` and logs quality analysis:
-```
-============================================================
-Audio Quality Analysis for Larsens
-============================================================
-File: transmission_20251224_232338.wav
-Duration: 3.10 seconds
-Average Amplitude: 11957.38
-End Amplitude (last 100ms): 11953.92
-Silence at End: No
-Packet Count: 97
-Avg Inter-Packet Delay: 31.04 ms
-============================================================
-```
+Then type: `T` (transmit 3s), `S` (stop), `?` (status)
 
 ## Key Files Modified
 

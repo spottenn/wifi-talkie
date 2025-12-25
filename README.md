@@ -51,32 +51,30 @@ pip install platformio
 # Install "PlatformIO IDE" from VSCode marketplace
 ```
 
-### 2. Clone and Configure
+### 2. Configure
 
 ```bash
 cd wifi-talkie
 
-# Edit WiFi credentials in include/config.h
-# Set your WiFi SSID and password
+# Copy example config
+cp .env.example .env
+
+# Edit .env with your settings
+nano .env  # or use any text editor
 ```
 
-### 3. Configure Server
+Set in `.env`:
+- `WIFI_SSID_1` and `WIFI_PASSWORD_1` - Your WiFi credentials
+- `WEBSOCKET_SERVER` - Your computer's IP (e.g., `ws://192.168.0.178:8080`)
+- `DEVICE_NAME` - Unique name for each device
 
-Edit `include/config.h` and set your server address:
-
-```cpp
-// For self-hosted server on local network
-#define WEBSOCKET_SERVER "ws://192.168.1.100"  // Your server's IP
-#define WEBSOCKET_PORT 8080
-```
-
-### 4. Build and Upload
+### 3. Build and Upload
 
 ```bash
-# Build the firmware
-pio run
+# Generate config from .env
+python configure.py
 
-# Upload to M5Stack Atom Echo
+# Build and upload to device
 pio run --target upload
 
 # Monitor serial output
@@ -199,46 +197,45 @@ The M5Stack Atom Echo uses these pins (DO NOT MODIFY):
 
 ## Customization
 
-### Audio Quality
-
-Edit `include/config.h`:
-
-```cpp
-// Higher sample rate = better quality, more bandwidth
-#define SAMPLE_RATE 16000  // Try 8000, 16000, or 22050
-
-// Buffer size affects latency
-#define AUDIO_BUFFER_SIZE 512  // Try 256, 512, or 1024
-```
-
 ### Device Naming
 
-Give each walkie-talkie a unique name:
-
-```cpp
-#define DEVICE_NAME "Alice"  // Change for each device
+Edit `.env` before flashing each device:
+```
+DEVICE_NAME=Alice
 ```
 
-### Reconnection Behavior
+### Audio Quality
 
+Edit `include/config.h` (advanced):
 ```cpp
-#define WIFI_TIMEOUT 10000      // WiFi connection timeout (ms)
-#define RECONNECT_DELAY 5000    // Auto-reconnect delay (ms)
+#define SAMPLE_RATE 16000       // 8000 or 16000
+#define AUDIO_BUFFER_SIZE 512   // 256, 512, or 1024
+```
+
+### Multiple WiFi Networks
+
+Add up to 3 networks in `.env` - device tries each in order:
+```
+WIFI_SSID_1=HomeNetwork
+WIFI_PASSWORD_1=password1
+
+WIFI_SSID_2=GrandmasHouse
+WIFI_PASSWORD_2=password2
 ```
 
 ## Troubleshooting
 
 ### WiFi Won't Connect
 
-- Check SSID and password in `config.h`
+- Check SSID and password in `.env`, then re-run `python configure.py` and reflash
 - Ensure WiFi is 2.4GHz (ESP32 doesn't support 5GHz)
 - Check signal strength
-- Monitor serial output for error messages
+- Monitor serial output: `pio device monitor`
 
 ### WebSocket Connection Fails
 
 - Verify server is running and accessible
-- Check server IP address in `config.h`
+- Check server IP address in `.env`
 - Ensure firewall allows port 8080
 - Test server health endpoint: `http://server-ip:8080/health`
 
