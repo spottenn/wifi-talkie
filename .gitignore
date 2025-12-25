@@ -39,3 +39,6 @@ include/config_local.h
 
 # Logs
 *.log
+
+# Test recordings
+server/recordings/
