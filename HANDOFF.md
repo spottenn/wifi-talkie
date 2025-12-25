@@ -136,30 +136,17 @@ Type these characters into the serial monitor:
 - `S` - Stop transmission
 - `?` - Print device status
 
-## Testing Infrastructure
+## Testing
 
-### Test Scripts (in project root)
-- `monitor_and_test.py` - Send commands and monitor single device
-- `test_receiver.py` - Test bidirectional TX/RX behavior (COM9 TX, COM13 RX)
-- `test_from_com13.py` - Test transmission from COM13 (phone-adjacent device)
-- `send_test.py` - Simple command sender
-- `analyze_clipping.py` - Analyze WAV files for clipping and audio quality
-- `verify_success.py` - Verify all success criteria from plan
-- `list_ports.py` - List available COM ports
-
-### Quick Test
-```bash
-# Terminal 1: Start server
-cd server && python server.py
-
-# Terminal 2: Run test on COM9
-python monitor_and_test.py COM9 8
-
-# Check server output for audio quality analysis
+### Debug Commands (via Serial Monitor)
+Use PlatformIO serial monitor to send debug commands:
+```powershell
+C:\Users\spott\AppData\Local\Programs\Python\Python312\Scripts\pio.exe device monitor --port COM9 --baud 115200
 ```
+Then type: `T` (transmit), `S` (stop), `?` (status)
 
 ### Server Audio Recording
-The server now records all transmissions to `server/recordings/*.wav` and logs quality analysis:
+The server records transmissions to `server/recordings/*.wav` and logs quality analysis:
 ```
 ============================================================
 Audio Quality Analysis for Larsens
@@ -205,24 +192,7 @@ Major changes:
 
 - Branch: main
 - Repository: spottenn/wifi-talkie
-- Changes made but not committed (to be committed by user)
-
-### Modified Files
-- `HANDOFF.md` - This file
-- `platformio.ini` - Build configuration
-- `server/server.py` - Added audio recording feature
-- `src/main.cpp` - All audio fixes
-
-### New Files (untracked)
-- `analyze_clipping.py` - Audio analysis script
-- `list_ports.py` - COM port lister
-- `monitor_and_test.py` - Device testing script
-- `send_test.py` - Command sender
-- `test_receiver.py` - Bidirectional test
-- `test_from_com13.py` - COM13 test script
-- `verify_success.py` - Success criteria checker
-- `server/RECORDING_FEATURE.md` - Recording feature docs
-- `server/recordings/` - Recorded WAV files
+- All changes committed and pushed
 
 ---
 
