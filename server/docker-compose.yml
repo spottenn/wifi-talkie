@@ -2,7 +2,7 @@ services:
   walkie-server:
     image: ghcr.io/spottenn/wifi-talkie-server:latest
     ports:
-      - "8080:8080"
+      - "8280:8080"
     volumes:
       - /home/spottenn/docker/walkie-server/recordings:/app/recordings
     restart: unless-stopped
