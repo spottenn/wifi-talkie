@@ -1,0 +1,13 @@
+services:
+  walkie-server:
+    image: ghcr.io/spottenn/wifi-talkie-server:latest
+    # For local builds, comment out 'image' above and uncomment:
+    # build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - walkie-recordings:/app/recordings
+    restart: unless-stopped
+
+volumes:
+  walkie-recordings:

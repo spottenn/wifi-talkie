@@ -12,6 +12,11 @@ bool isTransmitting = false;
 bool buttonPressed = false;
 bool isSpeakerMode = false;  // Track current I2S mode
 
+// Button debouncing
+unsigned long lastButtonChange = 0;
+bool lastRawButtonState = false;
+const unsigned long DEBOUNCE_MS = 50;  // Require stable state for 50ms
+
 // Debug transmission control (serial commands)
 bool debugTransmitting = false;
 unsigned long debugTransmitStart = 0;
@@ -22,11 +27,27 @@ unsigned long lastAudioReceived = 0;
 const unsigned long SPEAKER_TIMEOUT_MS = 300;  // Switch back to mic after 300ms of silence
 
 // Audio gain for PDM microphone (raw PDM is very quiet)
-const int16_t AUDIO_GAIN = 8;  // 8x amplification
+const int16_t AUDIO_GAIN = 6;  // 6x amplification
 
-// Audio buffer
+// DC offset correction for PDM microphone
+// PDM mics often have DC bias that needs removal
+int32_t dcOffset = 0;
+const int DC_OFFSET_ALPHA = 64;  // Smoothing factor (higher = slower adaptation)
+
+// Audio buffers
 int16_t audioBuffer[AUDIO_BUFFER_SIZE];
 int16_t silenceBuffer[AUDIO_BUFFER_SIZE] = {0};  // Pre-filled silence for flushing
+
+// Jitter buffer for smooth playback over WiFi
+// Buffer ~200ms of audio to smooth out network jitter (seen 66ms gaps in testing)
+// At 16kHz, 16-bit mono: 200ms = 3200 samples = 6400 bytes
+const int JITTER_BUFFER_SIZE = 6400;  // bytes (~200ms capacity)
+const int JITTER_BUFFER_TARGET = 3200; // Start playback when buffer has this many bytes (~100ms)
+uint8_t jitterBuffer[JITTER_BUFFER_SIZE];
+volatile int jitterWritePos = 0;
+volatile int jitterReadPos = 0;
+volatile int jitterBuffered = 0;  // Current bytes in buffer
+bool jitterBuffering = true;  // True while building up initial buffer
 
 // LED colors for status indication
 const uint32_t COLOR_DISCONNECTED = 0xFF0000;  // Red
@@ -35,7 +56,7 @@ const uint32_t COLOR_TRANSMITTING = 0x0000FF;  // Blue
 const uint32_t COLOR_RECEIVING = 0xFFFF00;     // Yellow
 
 // I2S configuration for microphone (input)
-// Increased DMA buffers: 8 x 256 = 2048 samples = 128ms at 16kHz (was 16ms)
+// Buffer: 4 x 256 = 1024 samples = 64ms at 16kHz (ESPHome uses 60ms)
 const i2s_config_t i2s_config_mic = {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM),
     .sample_rate = SAMPLE_RATE,
@@ -43,7 +64,7 @@ const i2s_config_t i2s_config_mic = {
     .channel_format = I2S_CHANNEL_FMT_ALL_RIGHT,
     .communication_format = I2S_COMM_FORMAT_STAND_I2S,
     .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-    .dma_buf_count = 8,
+    .dma_buf_count = 4,
     .dma_buf_len = 256,
 };
 
@@ -55,15 +76,16 @@ const i2s_pin_config_t pin_config_mic = {
 };
 
 // I2S configuration for speaker (output)
-// Increased DMA buffers: 8 x 256 = 2048 samples = 128ms at 16kHz (was 16ms)
+// Use mono format since our audio stream is mono
+// Buffer: 4 x 256 = 1024 samples = 64ms at 16kHz
 const i2s_config_t i2s_config_spk = {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
     .sample_rate = SAMPLE_RATE,
     .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-    .channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT,
+    .channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT,  // Mono - matches our audio stream
     .communication_format = I2S_COMM_FORMAT_STAND_I2S,
     .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-    .dma_buf_count = 8,
+    .dma_buf_count = 4,
     .dma_buf_len = 256,
 };
 
@@ -86,6 +108,52 @@ void flushSpeakerWithSilence() {
         i2s_write(I2S_NUM_0, silenceBuffer, sizeof(silenceBuffer), &bytes_written, 10);
     }
     i2s_zero_dma_buffer(I2S_NUM_0);  // Also zero the DMA buffer directly
+}
+
+void resetJitterBuffer() {
+    // Reset jitter buffer state for new transmission
+    jitterWritePos = 0;
+    jitterReadPos = 0;
+    jitterBuffered = 0;
+    jitterBuffering = true;
+    Serial.println("[JITTER] Buffer reset");
+}
+
+void addToJitterBuffer(uint8_t* data, int len) {
+    // Add data to circular jitter buffer
+    for (int i = 0; i < len && jitterBuffered < JITTER_BUFFER_SIZE; i++) {
+        jitterBuffer[jitterWritePos] = data[i];
+        jitterWritePos = (jitterWritePos + 1) % JITTER_BUFFER_SIZE;
+        jitterBuffered++;
+    }
+}
+
+int readFromJitterBuffer(uint8_t* dest, int maxLen) {
+    // Read data from jitter buffer
+    int buffered = jitterBuffered;  // Copy volatile to local
+    int toRead = (maxLen < buffered) ? maxLen : buffered;
+    for (int i = 0; i < toRead; i++) {
+        dest[i] = jitterBuffer[jitterReadPos];
+        jitterReadPos = (jitterReadPos + 1) % JITTER_BUFFER_SIZE;
+    }
+    jitterBuffered -= toRead;
+    return toRead;
+}
+
+void drainJitterBuffer() {
+    // Play any remaining audio in jitter buffer before switching modes
+    if (jitterBuffered > 0 && isSpeakerMode) {
+        Serial.printf("[JITTER] Draining %d remaining bytes\n", jitterBuffered);
+        uint8_t playBuffer[512];
+        while (jitterBuffered > 0) {
+            int toPlay = readFromJitterBuffer(playBuffer, sizeof(playBuffer));
+            if (toPlay > 0) {
+                size_t bytes_written;
+                i2s_write(I2S_NUM_0, playBuffer, toPlay, &bytes_written, 50);
+            }
+        }
+    }
+    resetJitterBuffer();
 }
 
 void switchToMicMode() {
@@ -192,25 +260,82 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
             break;
 
         case WStype_TEXT:
-            Serial.printf("Text message received: %s\n", payload);
+            // Parse JSON messages
+            {
+                JsonDocument doc;
+                DeserializationError error = deserializeJson(doc, payload);
+                if (!error) {
+                    const char* msgType = doc["type"];
+                    if (msgType) {
+                        if (strcmp(msgType, "transmission_started") == 0) {
+                            // New transmission starting - reset jitter buffer
+                            Serial.printf("[%s] Transmission started from %s\n",
+                                DEVICE_NAME, doc["device"].as<const char*>());
+                            resetJitterBuffer();
+                        } else if (strcmp(msgType, "transmission_ended") == 0) {
+                            // Transmission ended - drain remaining audio then flush
+                            Serial.printf("[%s] Transmission ended from %s\n",
+                                DEVICE_NAME, doc["device"].as<const char*>());
+                            if (isSpeakerMode) {
+                                drainJitterBuffer();  // Play remaining buffered audio
+                                flushSpeakerWithSilence();  // Clear DMA buffers
+                                setLEDColor(COLOR_CONNECTED);
+                            }
+                        }
+                    }
+                }
+                Serial.printf("Text message: %s\n", payload);
+            }
             break;
 
         case WStype_BIN:
             // Received audio data from another walkie-talkie
             if (!isTransmitting && !debugTransmitting) {
-                // Only play if we're not transmitting
+                // If we weren't in speaker mode, this is a new transmission - reset buffer
+                if (!isSpeakerMode) {
+                    resetJitterBuffer();
+                    Serial.println("[JITTER] New transmission detected, buffer reset");
+                }
+
                 setLEDColor(COLOR_RECEIVING);
-
-                // Switch to speaker mode and play
                 switchToSpeakerMode();
-                size_t bytes_written;
-                i2s_write(I2S_NUM_0, payload, length, &bytes_written, portMAX_DELAY);
 
-                // Track when we last received audio for timeout-based mode switching
+                // Add incoming audio to jitter buffer
+                addToJitterBuffer(payload, length);
+
+                // Check if we should start/continue playback
+                if (jitterBuffering) {
+                    // Still building up initial buffer
+                    if (jitterBuffered >= JITTER_BUFFER_TARGET) {
+                        jitterBuffering = false;
+                        Serial.printf("[JITTER] Buffer ready: %d bytes, starting playback\n", jitterBuffered);
+                    }
+                }
+
+                // Play from jitter buffer if we have enough data
+                if (!jitterBuffering) {
+                    if (jitterBuffered > 0) {
+                        uint8_t playBuffer[1024];
+                        int toPlay = readFromJitterBuffer(playBuffer, sizeof(playBuffer));
+                        if (toPlay > 0) {
+                            size_t bytes_written;
+                            i2s_write(I2S_NUM_0, playBuffer, toPlay, &bytes_written, portMAX_DELAY);
+                        }
+                        // Warn if buffer is getting low
+                        if (jitterBuffered < 1024) {
+                            Serial.printf("[JITTER] LOW: %d bytes remaining\n", jitterBuffered);
+                        }
+                    } else {
+                        // Buffer ran dry! Write silence to prevent DMA repeat
+                        Serial.println("[JITTER] UNDERRUN - writing silence");
+                        size_t bytes_written;
+                        i2s_write(I2S_NUM_0, silenceBuffer, sizeof(silenceBuffer), &bytes_written, 10);
+                        // Go back to buffering mode to rebuild
+                        jitterBuffering = true;
+                    }
+                }
+
                 lastAudioReceived = millis();
-
-                Serial.printf("[%s] Played audio: %d bytes\n", DEVICE_NAME, length);
-                // Don't immediately switch LED - let timeout handle it
             }
             break;
 
@@ -257,19 +382,31 @@ void transmitAudio() {
     i2s_read(I2S_NUM_0, audioBuffer, sizeof(audioBuffer), &bytes_read, portMAX_DELAY);
 
     if (bytes_read > 0) {
-        // Apply gain amplification - PDM microphone output is very quiet
         int numSamples = bytes_read / sizeof(int16_t);
+
+        // Apply DC offset correction and gain
         for (int i = 0; i < numSamples; i++) {
-            int32_t amplified = (int32_t)audioBuffer[i] * AUDIO_GAIN;
+            int32_t sample = (int32_t)audioBuffer[i];
+
+            // Update DC offset estimate (exponential moving average)
+            dcOffset = dcOffset + (sample - dcOffset) / DC_OFFSET_ALPHA;
+
+            // Remove DC offset
+            sample = sample - dcOffset;
+
+            // Apply gain amplification
+            sample = sample * AUDIO_GAIN;
+
             // Clip to prevent overflow
-            if (amplified > 32767) amplified = 32767;
-            if (amplified < -32768) amplified = -32768;
-            audioBuffer[i] = (int16_t)amplified;
+            if (sample > 32767) sample = 32767;
+            if (sample < -32768) sample = -32768;
+
+            audioBuffer[i] = (int16_t)sample;
         }
 
         // Send audio data to server
         webSocket.sendBIN((uint8_t*)audioBuffer, bytes_read);
-        Serial.printf("[%s] Transmitted %d bytes of audio (gain=%d)\n", DEVICE_NAME, bytes_read, AUDIO_GAIN);
+        Serial.printf("[%s] TX %d bytes, dc=%d\n", DEVICE_NAME, bytes_read, (int)dcOffset);
     }
 }
 
@@ -409,18 +546,32 @@ void loop() {
     // This prevents buzzing and prepares device for transmitting
     if (isSpeakerMode && !isTransmitting && !debugTransmitting) {
         if (lastAudioReceived > 0 && (millis() - lastAudioReceived > SPEAKER_TIMEOUT_MS)) {
-            Serial.println("[AUTO] Speaker timeout - switching to mic mode");
+            Serial.println("[AUTO] Speaker timeout - draining buffer and switching to mic");
+            drainJitterBuffer();  // Play remaining buffered audio
+            flushSpeakerWithSilence();  // Clear DMA buffers
             switchToMicMode();
             setLEDColor(COLOR_CONNECTED);
             lastAudioReceived = 0;  // Reset to avoid repeated switches
         }
     }
 
-    // Check button state (M5Atom button is active low)
-    bool currentButtonState = M5.Btn.isPressed();
+    // Check button state with debouncing
+    bool rawButtonState = M5.Btn.isPressed();
 
-    if (currentButtonState && !buttonPressed) {
-        // Button just pressed - start transmitting
+    // Detect raw state change
+    if (rawButtonState != lastRawButtonState) {
+        lastButtonChange = millis();
+        lastRawButtonState = rawButtonState;
+    }
+
+    // Only act on button state if it's been stable for DEBOUNCE_MS
+    bool stableButtonState = buttonPressed;  // Default to current state
+    if ((millis() - lastButtonChange) >= DEBOUNCE_MS) {
+        stableButtonState = rawButtonState;
+    }
+
+    if (stableButtonState && !buttonPressed) {
+        // Button just pressed (debounced) - start transmitting
         buttonPressed = true;
         if (isConnected && !debugTransmitting) {
             isTransmitting = true;
@@ -435,8 +586,8 @@ void loop() {
             serializeJson(doc, output);
             webSocket.sendTXT(output);
         }
-    } else if (!currentButtonState && buttonPressed) {
-        // Button just released - stop transmitting
+    } else if (!stableButtonState && buttonPressed) {
+        // Button just released (debounced) - stop transmitting
         buttonPressed = false;
         if (isTransmitting) {
             isTransmitting = false;

@@ -3,7 +3,7 @@
 WiFi Walkie-Talkie WebSocket Server (Python version)
 
 This server relays audio data between all connected walkie-talkie devices.
-When one device transmits, all other devices receive the audio.
+Supports multiple simultaneous transmitters by mixing audio streams.
 
 Requirements:
     pip install websockets asyncio
@@ -16,7 +16,8 @@ import os
 import struct
 import wave
 from datetime import datetime
-from typing import Set, Optional, List
+from typing import Set, Optional, List, Dict
+from collections import deque
 import websockets
 from websockets.server import serve
 
@@ -39,10 +40,17 @@ RECORDINGS_DIR = os.path.join(os.path.dirname(__file__), 'recordings')
 SAMPLE_RATE = 16000  # 16 kHz
 SAMPLE_WIDTH = 2     # 16-bit = 2 bytes
 CHANNELS = 1         # Mono
+SAMPLES_PER_PACKET = 512  # Expected samples per packet
+
+# Mixer configuration
+MIXER_INTERVAL_MS = 30  # Mix and broadcast every 30ms
 
 # Store connected clients
 clients: Set[websockets.WebSocketServerProtocol] = set()
-transmitting_client = None
+transmitting_clients: Set[websockets.WebSocketServerProtocol] = set()
+
+# Audio buffers for mixing (one queue per transmitting client)
+audio_queues: Dict[websockets.WebSocketServerProtocol, deque] = {}
 
 # Recording state for current transmission
 class TransmissionRecording:
@@ -221,35 +229,83 @@ async def register_client(websocket):
 
 async def unregister_client(websocket):
     """Unregister a client connection."""
-    global transmitting_client
-
     clients.discard(websocket)
-    if transmitting_client == websocket:
-        transmitting_client = None
+    transmitting_clients.discard(websocket)
+    if websocket in audio_queues:
+        del audio_queues[websocket]
 
     logger.info(f"Client disconnected from {websocket.remote_address}")
     logger.info(f"Total clients: {len(clients)}")
 
 
+def mix_audio_packets(packets: List[bytes]) -> bytes:
+    """Mix multiple audio packets together by adding samples with clipping."""
+    if not packets:
+        return b''
+    if len(packets) == 1:
+        return packets[0]
+
+    # Find the longest packet
+    max_len = max(len(p) for p in packets)
+    num_samples = max_len // SAMPLE_WIDTH
+
+    # Mix all packets
+    mixed = [0] * num_samples
+    for packet in packets:
+        samples = struct.unpack(f'<{len(packet)//SAMPLE_WIDTH}h', packet)
+        for i, sample in enumerate(samples):
+            mixed[i] += sample
+
+    # Clip to 16-bit range
+    clipped = []
+    for sample in mixed:
+        if sample > 32767:
+            sample = 32767
+        elif sample < -32768:
+            sample = -32768
+        clipped.append(sample)
+
+    return struct.pack(f'<{len(clipped)}h', *clipped)
+
+
 async def broadcast_audio(data: bytes, sender):
-    """Broadcast audio data to all clients except sender."""
-    if not clients:
-        return
+    """Mix and broadcast audio immediately when received."""
+    # Collect this packet plus any waiting packets from other transmitters
+    packets = [data]
+    senders = {sender}
 
-    # Record the audio packet
-    add_audio_packet(data)
+    # Check if other transmitters have packets waiting
+    for client in list(transmitting_clients):
+        if client != sender and client in audio_queues and audio_queues[client]:
+            packets.append(audio_queues[client].popleft())
+            senders.add(client)
 
-    sent_count = 0
-    # Send to all clients except the sender
+    # If there are other transmitters but no packets ready, queue this one briefly
+    other_transmitters = transmitting_clients - {sender}
+    if other_transmitters and len(packets) == 1:
+        # Queue this packet for the other transmitter to pick up
+        if sender not in audio_queues:
+            audio_queues[sender] = deque(maxlen=3)  # Small buffer
+        audio_queues[sender].append(data)
+        return  # Don't send yet, wait for other transmitter's packet
+
+    # Mix if we have multiple packets
+    mixed = mix_audio_packets(packets)
+
+    # Record the mixed audio
+    add_audio_packet(mixed)
+
+    # Broadcast to all clients NOT currently transmitting
     tasks = []
     for client in clients:
-        if client != sender:
-            tasks.append(send_audio(client, data))
+        if client not in transmitting_clients:
+            tasks.append(send_audio(client, mixed))
 
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    sent_count = sum(1 for r in results if r is True)
-
-    logger.info(f"Audio broadcasted to {sent_count}/{len(clients)-1} clients")
+    if tasks:
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        sent_count = sum(1 for r in results if r is True)
+        if len(senders) > 1:
+            logger.info(f"Mixed {len(senders)} streams, sent to {sent_count} clients")
 
 
 async def send_audio(client, data: bytes):
@@ -284,17 +340,15 @@ async def send_message(client, message: str):
 
 async def handle_client(websocket):
     """Handle a client connection."""
-    global transmitting_client
-
     # Register client
     await register_client(websocket)
 
     try:
         async for message in websocket:
             if isinstance(message, bytes):
-                # Binary data = audio
-                logger.info(f"Received audio data: {len(message)} bytes from {websocket.remote_address}")
-                await broadcast_audio(message, websocket)
+                # Binary data = audio - queue for mixing
+                if websocket in transmitting_clients:
+                    await broadcast_audio(message, websocket)
             else:
                 # Text data = control messages
                 try:
@@ -315,12 +369,14 @@ async def handle_client(websocket):
                         }))
 
                     elif msg_type == 'start_transmission':
-                        transmitting_client = websocket
+                        transmitting_clients.add(websocket)
+                        audio_queues[websocket] = deque(maxlen=10)
                         device_name = getattr(websocket, 'device_name', 'unknown')
-                        logger.info(f"{device_name} started transmitting")
+                        logger.info(f"{device_name} started transmitting ({len(transmitting_clients)} active)")
 
-                        # Start recording
-                        start_recording(device_name)
+                        # Start recording if first transmitter
+                        if len(transmitting_clients) == 1:
+                            start_recording(device_name)
 
                         # Notify other clients
                         await broadcast_message({
@@ -329,13 +385,15 @@ async def handle_client(websocket):
                         }, exclude=websocket)
 
                     elif msg_type == 'end_transmission':
-                        if transmitting_client == websocket:
-                            transmitting_client = None
+                        transmitting_clients.discard(websocket)
+                        if websocket in audio_queues:
+                            del audio_queues[websocket]
                         device_name = getattr(websocket, 'device_name', 'unknown')
-                        logger.info(f"{device_name} stopped transmitting")
+                        logger.info(f"{device_name} stopped transmitting ({len(transmitting_clients)} active)")
 
-                        # Save recording and analyze
-                        save_recording_and_analyze()
+                        # Save recording if no more transmitters
+                        if len(transmitting_clients) == 0:
+                            save_recording_and_analyze()
 
                         # Notify other clients
                         await broadcast_message({
@@ -354,6 +412,10 @@ async def handle_client(websocket):
     except Exception as e:
         logger.error(f"Error handling client {websocket.remote_address}: {e}")
     finally:
+        # Clean up on disconnect
+        transmitting_clients.discard(websocket)
+        if websocket in audio_queues:
+            del audio_queues[websocket]
         await unregister_client(websocket)
 
 
@@ -364,6 +426,7 @@ async def main():
     logger.info("=" * 40)
     logger.info(f"Starting server on {HOST}:{PORT}")
     logger.info(f"WebSocket endpoint: ws://{HOST}:{PORT}/walkie")
+    logger.info("Audio mixing: immediate (low-latency)")
     logger.info("=" * 40)
 
     async with serve(handle_client, HOST, PORT):
