@@ -10,10 +10,12 @@ Requirements:
 """
 
 import asyncio
+import glob
 import json
 import logging
 import os
 import struct
+import time
 import wave
 from datetime import datetime
 from typing import Set, Optional, List, Dict
@@ -35,6 +37,7 @@ HOST = '0.0.0.0'
 # Recording configuration
 RECORDING_ENABLED = True
 RECORDINGS_DIR = os.path.join(os.path.dirname(__file__), 'recordings')
+RECORDING_TTL_DAYS = 7  # Delete recordings older than this
 
 # Audio format constants
 SAMPLE_RATE = 16000  # 16 kHz
@@ -69,6 +72,34 @@ def ensure_recordings_directory():
     if RECORDING_ENABLED and not os.path.exists(RECORDINGS_DIR):
         os.makedirs(RECORDINGS_DIR)
         logger.info(f"Created recordings directory: {RECORDINGS_DIR}")
+
+
+def cleanup_old_recordings():
+    """Delete recordings older than RECORDING_TTL_DAYS."""
+    if not RECORDING_ENABLED or not os.path.exists(RECORDINGS_DIR):
+        return
+
+    cutoff_time = time.time() - (RECORDING_TTL_DAYS * 24 * 60 * 60)
+    deleted_count = 0
+
+    for filepath in glob.glob(os.path.join(RECORDINGS_DIR, '*.wav')):
+        try:
+            if os.path.getmtime(filepath) < cutoff_time:
+                os.remove(filepath)
+                deleted_count += 1
+                logger.info(f"Deleted old recording: {os.path.basename(filepath)}")
+        except OSError as e:
+            logger.error(f"Error deleting {filepath}: {e}")
+
+    if deleted_count > 0:
+        logger.info(f"Cleaned up {deleted_count} recording(s) older than {RECORDING_TTL_DAYS} days")
+
+
+async def periodic_cleanup():
+    """Run cleanup task every hour."""
+    while True:
+        cleanup_old_recordings()
+        await asyncio.sleep(3600)  # Run every hour
 
 
 def start_recording(device_name: str):
@@ -427,7 +458,12 @@ async def main():
     logger.info(f"Starting server on {HOST}:{PORT}")
     logger.info(f"WebSocket endpoint: ws://{HOST}:{PORT}/walkie")
     logger.info("Audio mixing: immediate (low-latency)")
+    logger.info(f"Recording TTL: {RECORDING_TTL_DAYS} days")
     logger.info("=" * 40)
+
+    # Run initial cleanup and start periodic task
+    cleanup_old_recordings()
+    asyncio.create_task(periodic_cleanup())
 
     async with serve(handle_client, HOST, PORT):
         await asyncio.Future()  # run forever
