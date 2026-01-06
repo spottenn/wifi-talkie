@@ -74,10 +74,16 @@ def generate_config_header(config, output_path="include/config_local.h"):
                 f.write(f'#define {password_key} "{escape_string(password)}"\n')
                 f.write("\n")
 
-        # WebSocket Server
+        # WebSocket Server - parse URL to extract host and port
         server = config.get("WEBSOCKET_SERVER", "")
         if server:
             f.write(f'#define WEBSOCKET_SERVER "{escape_string(server)}"\n')
+            # Extract port from URL if present (e.g., ws://host:8280)
+            import re
+            port_match = re.search(r':(\d+)', server.replace('ws://', '').replace('wss://', ''))
+            if port_match:
+                port = port_match.group(1)
+                f.write(f'#define WEBSOCKET_PORT {port}\n')
 
         # Device Name
         device_name = config.get("DEVICE_NAME", "")

@@ -113,6 +113,11 @@ def generate_config_header(config, device_name):
         server = config.get("WEBSOCKET_SERVER", "")
         if server:
             f.write(f'#define WEBSOCKET_SERVER "{server}"\n')
+            # Extract port from URL if present (e.g., ws://host:8280)
+            port_match = re.search(r':(\d+)', server.replace('ws://', '').replace('wss://', ''))
+            if port_match:
+                port = port_match.group(1)
+                f.write(f'#define WEBSOCKET_PORT {port}\n')
 
         # Device name
         f.write(f'#define DEVICE_NAME "{device_name}"\n')

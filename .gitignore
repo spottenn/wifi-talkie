@@ -42,6 +42,7 @@ include/config_local.h
 
 # Notes/scratch files
 chatgpt-message.md
+scratch/
 
 # Test recordings
 server/recordings/
