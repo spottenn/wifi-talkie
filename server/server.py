@@ -82,7 +82,7 @@ class SignalingBridge:
         all_devices = [d.device_name for d in self.devices.values()]
         await websocket.send(json.dumps({
             'type': 'registered', 'device': device_name, 'devices': all_devices,
-            'turn': {'server': TURN_SERVER, 'user': TURN_USER, 'password': TURN_PASSWORD}
+            'turn': {'urls': f'turn:{TURN_SERVER}', 'username': TURN_USER, 'credential': TURN_PASSWORD}
         }))
         await self.broadcast_message({'type': 'device_joined', 'device': device_name, 'clients': len(self.devices)}, exclude=websocket)
 
